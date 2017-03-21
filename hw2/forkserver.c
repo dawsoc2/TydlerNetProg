@@ -54,6 +54,27 @@ ssize_t readn(int fd, void *vptr, size_t n)
 	return (n - nleft);
 }
 
+//writen from pg 89 of textbook
+ssize_t writen(int fd, const void *vptr, size_t n)
+{
+	size_t nleft;
+	ssize_t nwritten;
+	const char *ptr;
+	ptr = vptr;
+	nleft = n;
+	while (nleft > 0)
+	{
+		if ((nwritten = write(fd, ptr, left)) <= 0)
+		{
+			if (nwritten < 0 && errno == EINTR) nwritten = 0;
+			else return (-1);
+		}
+		nleft -= nwritten;
+		ptr += nwritten;
+	}
+	return(n);
+}
+
 int checkOpCode(char* buffer, int byte_count)
 {
 	if (byte_count < 4) return -1; //2 bytes for opcode + 1 byte for EOS + 1byte for filename
@@ -216,6 +237,155 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		if (nbytes < 512) return 0; //end of file
 		//otherwise read the next 512 bytes.
 		nbytes = readn(fd, content, 512);
+	}
+}
+
+int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client, socklen_t fromlen)
+{
+	socklen_t tolen = fromlen;
+	char filename[byte_count];
+	char mode[byte_count];
+	strcpy(filename, buffer+2);
+	strcpy(mode, buffer+strlen(filename)+3);
+	int fd = creat(filename, 0644)
+	if (fd < 0) {
+		close(fd);
+		printf("[child %d] can't create file %s\n", getpid(), filename);
+		char errPack[BLOCK_SIZE];
+		short errCode = 05;
+		short* errCodeBytes = (short*)&errCode;
+		memcpy(errPack, errCodeBytes, 2);
+		errCode = 06; //file already exists
+		errCodeBytes = (short*)&errCode;
+		memcpy(errPack+2, errCodeBytes, 2);
+		char msg[20];
+		strcpy(msg, "file already exists");
+		memcpy(errPack+2, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		return -1;
+	}
+	
+	//check for octet mode. Currently only checks "octet" and not things such as "ocTEt"
+	if (strcmp(mode, "octet") != 0)
+	{
+		close(fd);
+		printf("[child %d] received non-octet request\n", getpid());
+		char errPack[BLOCK_SIZE];
+		short errCode = 05;
+		short* errCodeBytes = (short*)&errCode;
+		memcpy(errPack, errCodeBytes, 2);
+		errCode = 00; //not defined
+		errCodeBytes = (short*)&errCode;
+		memcpy(errPack+2, &errCodeBytes, 2);
+		char msg[20];
+		strcpy(msg, "Not octet mode");
+		memcpy(errPack+2, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		return -1;
+	}
+	//otherwise...
+	
+	//send ACK
+	char ackPack[4];
+	short ackCode = 04;
+	short* ackCodeBytes = (short*)&ackCode;
+	memcpy(ackPack, ackCodeBytes, 2);
+	short blockNum = 00;
+	short blockNumBytes = (short*)&blockNum;
+	memcpy(ackPack+2, blockNumBytes, 2);
+	sendto(socket, errPack, 4, 0, (struct sockaddr*) &client, tolen);
+	
+	//set alarm
+	signal(SIGALRM, recv_alarm);
+	char content[512];
+	//int nbytes = readn(fd, content, 512);
+	//short blockn = 1;
+	//char packet[516];
+	int tries = 0;
+	blockNum++;
+	while(1)
+	{
+		byte_count = 0;
+		alarm(1);
+		byte_count = recvfrom(socket, buffer, sizeof(buffer), 0, (struct sockaddr*) &client, &tolen);
+		alarm(0); //we got something, turn it off.
+		
+		if (byte_count == 0) //we didn't get anything
+		{
+			if (tries == 10) //we waited 10 seconds.
+			{
+				close(fd);
+				return -1;
+			}
+			tries = tries + 1;
+			continue;
+		}
+		
+		if (byte_count < 4) //invalid TFTP packet
+		{
+			close(fd);
+			printf("[child %d] received invalid TFTP packet\n", getpid());
+			char errPack[BLOCK_SIZE];
+			short errCode = 05;
+			short* errCodeBytes = (short*)&errCode;
+			memcpy(errPack, errCodeBytes, 2);
+			errCode = 04; //illegal TFTP operation
+			errCodeBytes = (short*)&errCode;
+			memcpy(errPack+2, errCodeBytes, 2);
+			char msg[20];
+			strcpy(msg, "invalid packet");
+			memcpy(errPack+2, msg, strlen(msg)+1);
+			sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+			return -1;
+		}
+		else if (checkOpCode(buffer, byte_count) != 3 && checkOpCode(buffer, byte_count) != 5)
+		{
+			tries = 0; //we technically heard something
+			continue;
+		}
+		else if (checkOpCode(buffer, byte_count) == 5) //error means just close connection
+		{
+			return -1;
+		}
+		else //we know it's a data pack
+		{
+			short* tempblock;
+			memcpy(tempblock, buffer+2, 2); //get the block number
+			if (*tempblock <= blockNum) //duplicate packet
+			{
+				tries = 0; //we technically heard something
+				continue;
+			}
+			else if (*tempblock > blockNum+1) //big mistake
+			{
+				close(fd);
+				printf("[child %d] received packet for future block\n", getpid());
+				char errPack[BLOCK_SIZE];
+				short errCode = 05;
+				short* errCodeBytes = (short*)&errCode;
+				memcpy(errPack, errCodeBytes, 2);
+				errCode = 04; //illegal TFTP operation
+				errCodeBytes = (short*)&errCode;
+				memcpy(errPack+2, errCodeBytes, 2);
+				char msg[20];
+				strcpy(msg, "future block");
+				memcpy(errPack+2, msg, strlen(msg)+1);
+				sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+				return -1;
+			}
+			else //tempblock = blockNum+1, write to file.
+			{
+				writen(fd, buffer[4], 512);
+				//send ack
+				memcpy(ackPack, ackCodeBytes, 2);
+				blockNum = tempblock;
+				blockNumBytes = (short*)&blockNum;
+				memcpy(ackPack+2, blockNumBytes, 2);
+				sendto(socket, errPack, 4, 0, (struct sockaddr*) &client, tolen);
+				//if byte_count < 516 it's the end of the file
+				return 0;
+			}
+		}
 	}
 }
 
