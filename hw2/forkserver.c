@@ -64,7 +64,7 @@ ssize_t writen(int fd, const void *vptr, size_t n)
 	nleft = n;
 	while (nleft > 0)
 	{
-		if ((nwritten = write(fd, ptr, left)) <= 0)
+		if ((nwritten = write(fd, ptr, nleft)) <= 0)
 		{
 			if (nwritten < 0 && errno == EINTR) nwritten = 0;
 			else return (-1);
@@ -247,7 +247,7 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	char mode[byte_count];
 	strcpy(filename, buffer+2);
 	strcpy(mode, buffer+strlen(filename)+3);
-	int fd = creat(filename, 0644)
+	int fd = creat(filename, 0644);
 	if (fd < 0) {
 		close(fd);
 		printf("[child %d] can't create file %s\n", getpid(), filename);
@@ -291,16 +291,13 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	short* ackCodeBytes = (short*)&ackCode;
 	memcpy(ackPack, ackCodeBytes, 2);
 	short blockNum = 00;
-	short blockNumBytes = (short*)&blockNum;
+	short* blockNumBytes = (short*)&blockNum;
 	memcpy(ackPack+2, blockNumBytes, 2);
-	sendto(socket, errPack, 4, 0, (struct sockaddr*) &client, tolen);
+	sendto(socket, ackPack, 4, 0, (struct sockaddr*) &client, tolen);
 	
 	//set alarm
 	signal(SIGALRM, recv_alarm);
-	char content[512];
-	//int nbytes = readn(fd, content, 512);
-	//short blockn = 1;
-	//char packet[516];
+
 	int tries = 0;
 	blockNum++;
 	while(1)
@@ -375,13 +372,13 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 			}
 			else //tempblock = blockNum+1, write to file.
 			{
-				writen(fd, buffer[4], 512);
+				writen(fd, buffer+4, 512);
 				//send ack
 				memcpy(ackPack, ackCodeBytes, 2);
-				blockNum = tempblock;
+				blockNum = *tempblock;
 				blockNumBytes = (short*)&blockNum;
 				memcpy(ackPack+2, blockNumBytes, 2);
-				sendto(socket, errPack, 4, 0, (struct sockaddr*) &client, tolen);
+				sendto(socket, ackPack, 4, 0, (struct sockaddr*) &client, tolen);
 				//if byte_count < 516 it's the end of the file
 				return 0;
 			}
@@ -414,13 +411,22 @@ int main()
     exit(EXIT_FAILURE);
   }
 
+  struct sockaddr_in temp_addr;
+  socklen_t sz = sizeof(temp_addr);
+  int ret = getsockname(sock, (struct sockaddr*) &temp_addr, &sz);
+  if (ret < 0) {
+	  printf("problem!\n");
+	  exit(-1);
+  }
+  int the_port = ntohs(temp_addr.sin_port);
+  printf("Created port %d\n", the_port);
+
   //listen(sock, 10); // Maximum number of clients allowed is 10
 
   struct sockaddr_in client;
   int fromlen = sizeof(client);
 
   char buffer[BLOCK_SIZE];
-  int n;
 
   while (1) {
 	// recvfrom(int sock, void* buf, size_t size_of_buf, int flags, struct sockaddr* from, socklen_t *fromlen)
@@ -460,7 +466,7 @@ int main()
 		int clientOpCode = checkOpCode(buffer, byte_count);
 		int rtn = 0;
 		if (clientOpCode == 1) {rtn = HandleRRQ(buffer, byte_count, newsock, (struct sockaddr *)&client, fromlen); }
-		else if (clientOpCode == 2) {rtn = HandleWRQ(&buffer, byte_count); }
+		else if (clientOpCode == 2) {rtn = HandleWRQ(buffer, byte_count, newsock, (struct sockaddr *)&client, fromlen); }
 		else {rtn = -1;} //a new client that isn't RRQ or WRQ is an error.
 		
 		//close the new socket
