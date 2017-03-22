@@ -92,7 +92,7 @@ int checkOpCode(char* buffer, int byte_count)
 {
 	if (byte_count < 4) return -1; //2 bytes for opcode + 1 byte for EOS + 1byte for filename
 	if ((short)buffer[0] != 0) return -1; //all opcodes start with 0
-	return (int)buffer[1]; //there's no way this works, right?
+	return (int)buffer[1];
 }
 
 int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client, socklen_t fromlen)
@@ -108,16 +108,15 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		close(fd);
 		printf("[child %d] can't open file %s\n", getpid(), filename);
 		char errPack[BLOCK_SIZE];
-		short errCode = 05;
-		short* errCodeBytes = (short*)&errCode;
-		memcpy(errPack, errCodeBytes, 2);
-		errCode = 01; //file not found
-		errCodeBytes = (short*)&errCode;
-		memcpy(errPack+2, errCodeBytes, 2);
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(1); //file not found
+		memcpy(errPack+2, &errCode, 2);
 		char msg[20];
 		strcpy(msg, "Invalid filename");
-		memcpy(errPack+2, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		memcpy(errPack+4, msg, strlen(msg)+1);
+		int result = sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
+		printf("Result %d\n", result);
 		return -1;
 	}
 	//check for normal file.
@@ -125,16 +124,14 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		close(fd);
 		printf("[child %d] requested abnormal file\n", getpid());
 		char errPack[BLOCK_SIZE];
-		short errCode = 05;
-		short* errCodeBytes = (short*)&errCode;
-		memcpy(errPack, errCodeBytes, 2);
-		errCode = 02; //access violation
-		errCodeBytes = (short*)&errCode;
-		memcpy(errPack+2, errCodeBytes, 2);
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(2); //file not found
+		memcpy(errPack+2, &errCode, 2);
 		char msg[20];
 		strcpy(msg, "Invalid file");
-		memcpy(errPack+2, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		memcpy(errPack+4, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
 	//check for octet mode. Currently only checks "octet" and not things such as "ocTEt"
@@ -143,16 +140,14 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		close(fd);
 		printf("[child %d] received non-octet request\n", getpid());
 		char errPack[BLOCK_SIZE];
-		short errCode = 05;
-		short* errCodeBytes = (short*)&errCode;
-		memcpy(errPack, errCodeBytes, 2);
-		errCode = 00; //not defined
-		errCodeBytes = (short*)&errCode;
-		memcpy(errPack+2, &errCodeBytes, 2);
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(0); //file not found
+		memcpy(errPack+2, &errCode, 2);
 		char msg[20];
 		strcpy(msg, "Not octet mode");
-		memcpy(errPack+2, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		memcpy(errPack+4, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
 	//otherwise...
@@ -164,13 +159,13 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	char packet[516];
 	while(1)
 	{
-		short* blocknBytes = (short*)&blockn;
-		short opCode = 03;
-		short* opCodeBytes = (short*)&opCode;
-		memcpy(packet, opCodeBytes, 2);
-		memcpy(packet+2, blocknBytes, 2);
+		short opCode = htons(3);
+		memcpy(packet, &opCode, 2);
+		short netBlockn = htons(blockn);
+		memcpy(packet+2, &netBlockn, 2);
 		memcpy(packet+4, content, nbytes);
-		sendto(socket, packet, nbytes+4, 0, (struct sockaddr*) &client, tolen);
+		int result = sendto(socket, packet, nbytes+4, 0, client, tolen);
+		printf("Result %d\n", result);
 		//wait for ack for 10s.
 		int tries = 0;
 		while (1)
@@ -217,14 +212,15 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 			}
 			else //we know it's an ack
 			{
-				short* tempblock;
-				memcpy(tempblock, buffer+2, 2); //get the block number
-				if (*tempblock < blockn) //duplicate ack
+				char tempblockStr[2];
+				memcpy(tempblockStr, buffer+2, 2); //get the block number
+				short tempblock = atoi(tempblockStr);
+				if (tempblock < blockn) //duplicate ack
 				{
 					tries = 0; //we technically heard something
 					continue;
 				}
-				else if (*tempblock > blockn) //big mistake
+				else if (tempblock > blockn) //big mistake
 				{
 					close(fd);
 					printf("[child %d] received ACK for future block\n", getpid());
@@ -255,7 +251,6 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 
 int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client, socklen_t fromlen)
 {
-	print_bytes(buffer, byte_count);
 	socklen_t tolen = fromlen;
 	char filename[byte_count];
 	char mode[byte_count];
@@ -305,19 +300,18 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	
 	//set alarm
 	signal(SIGALRM, recv_alarm);
-
+	char newBuffer[BLOCK_SIZE];
 	int tries = 0;
 	blockNum++;
+
 	while(1)
 	{
-		byte_count = 0;
 		alarm(1);
-		byte_count = recvfrom(socket, buffer, sizeof(buffer), 0, client, &tolen);
+		byte_count = recvfrom(socket, (void *)newBuffer, sizeof(newBuffer), 0, client, &fromlen);
 		alarm(0); //we got something, turn it off.
 		
 		if (byte_count == 0) //we didn't get anything
 		{
-			fflush(stdout);
 			if (tries == 10) //we waited 10 seconds.
 			{
 				close(fd);
@@ -338,32 +332,32 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 			memcpy(errPack+2, &errCode, 2);
 			char msg[20];
 			strcpy(msg, "invalid packet");
-			memcpy(errPack+2, msg, strlen(msg)+1);
+			memcpy(errPack+4, msg, strlen(msg)+1);
 			sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 			return -1;
 		}
-		else if (checkOpCode(buffer, byte_count) != 3 && checkOpCode(buffer, byte_count) != 5)
+		else if (checkOpCode(newBuffer, byte_count) != 3 && checkOpCode(newBuffer, byte_count) != 5)
 		{
-			fflush(stdout);
 			tries = 0; //we technically heard something
 			continue;
 		}
-		else if (checkOpCode(buffer, byte_count) == 5) //error means just close connection
+		else if (checkOpCode(newBuffer, byte_count) == 5) //error means just close connection
 		{
-			fflush(stdout);
 			return -1;
 		}
 		else //we know it's a data pack
 		{
-			short* tempblock;
-			memcpy(tempblock, buffer+2, 2); //get the block number
-			fflush(stdout);
-			if (*tempblock <= blockNum) //duplicate packet
+			char tempblockNet[2];
+			memcpy(tempblockNet, newBuffer+2, 2); //get the block number
+			short tempblock = (tempblockNet[0] << 8) + tempblockNet[1]; // convert chars to short
+
+			if (tempblock < blockNum) //duplicate packet
 			{
+				printf("[child %d] received duplicate packet\n", getpid());
 				tries = 0; //we technically heard something
 				continue;
 			}
-			else if (*tempblock > blockNum+1) //big mistake
+			else if (tempblock > blockNum) //big mistake
 			{
 				close(fd);
 				printf("[child %d] received packet for future block\n", getpid());
@@ -374,20 +368,21 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 				memcpy(errPack+2, &errCode, 2);
 				char msg[20];
 				strcpy(msg, "future block");
-				memcpy(errPack+2, msg, strlen(msg)+1);
+				memcpy(errPack+4, msg, strlen(msg)+1);
 				sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 				return -1;
 			}
 			else //tempblock = blockNum+1, write to file.
 			{
-				writen(fd, buffer+4, 512);
+				printf("[child %d] wrote data pack %d to disk\n", getpid(), blockNum);
+				writen(fd, newBuffer+4, byte_count-4);
 				//send ack
+				short blockNumNet = htons(blockNum);
 				memcpy(ackPack, &ackCode, 2);
-				blockNum = *tempblock;
-				memcpy(ackPack+2, &blockNum, 2);
+				memcpy(ackPack+2, &blockNumNet, 2);
 				sendto(socket, ackPack, 4, 0, client, tolen);
-				//if byte_count < 516 it's the end of the file
-				return 0;
+				blockNum++;
+				if (byte_count < 512) return 0;
 			}
 		}
 	}
@@ -410,7 +405,7 @@ int main()
   //choose arbitrary port
   //unsigned short port = 8765;
 
-  server.sin_port = htons(0);
+  server.sin_port = htons(8765);
   int len = sizeof(server);
 
   if (bind(sock, (struct sockaddr *)&server, len) < 0) {
