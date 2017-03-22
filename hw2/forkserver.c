@@ -32,6 +32,19 @@
 //alarm function that simply returns to get us out of recvfrom()
 static void recv_alarm(int signo) {return;}
 
+void print_bytes(const void *object, size_t size)
+{
+  const unsigned char * const bytes = object;
+  size_t i;
+
+  printf("[ ");
+  for(i = 0; i < size; i++)
+  {
+    printf("%02x ", bytes[i]);
+  }
+  printf("]\n");
+}
+
 //readn from pg 89 of textbook
 ssize_t readn(int fd, void *vptr, size_t n)
 {
@@ -242,6 +255,7 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 
 int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client, socklen_t fromlen)
 {
+	print_bytes(buffer, byte_count);
 	socklen_t tolen = fromlen;
 	char filename[byte_count];
 	char mode[byte_count];
@@ -252,16 +266,14 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		close(fd);
 		printf("[child %d] can't create file %s\n", getpid(), filename);
 		char errPack[BLOCK_SIZE];
-		short errCode = 05;
-		short* errCodeBytes = (short*)&errCode;
-		memcpy(errPack, errCodeBytes, 2);
-		errCode = 06; //file already exists
-		errCodeBytes = (short*)&errCode;
-		memcpy(errPack+2, errCodeBytes, 2);
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(6); //file already exists
+		memcpy(errPack+2, &errCode, 2);
 		char msg[20];
 		strcpy(msg, "file already exists");
 		memcpy(errPack+2, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
 	
@@ -271,29 +283,25 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		close(fd);
 		printf("[child %d] received non-octet request\n", getpid());
 		char errPack[BLOCK_SIZE];
-		short errCode = 05;
-		short* errCodeBytes = (short*)&errCode;
-		memcpy(errPack, errCodeBytes, 2);
-		errCode = 00; //not defined
-		errCodeBytes = (short*)&errCode;
-		memcpy(errPack+2, &errCodeBytes, 2);
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(0); //not defined
+		memcpy(errPack+2, &errCode, 2);
 		char msg[20];
 		strcpy(msg, "Not octet mode");
-		memcpy(errPack+2, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+		memcpy(errPack+4, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
 	//otherwise...
-	
+
 	//send ACK
 	char ackPack[4];
-	short ackCode = 04;
-	short* ackCodeBytes = (short*)&ackCode;
-	memcpy(ackPack, ackCodeBytes, 2);
-	short blockNum = 00;
-	short* blockNumBytes = (short*)&blockNum;
-	memcpy(ackPack+2, blockNumBytes, 2);
-	sendto(socket, ackPack, 4, 0, (struct sockaddr*) &client, tolen);
+	short ackCode = htons(4);
+	memcpy(ackPack, &ackCode, 2);
+	short blockNum = htons(0);
+	memcpy(ackPack+2, &blockNum, 2);
+	sendto(socket, ackPack, 4, 0, client, tolen);
 	
 	//set alarm
 	signal(SIGALRM, recv_alarm);
@@ -304,11 +312,12 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	{
 		byte_count = 0;
 		alarm(1);
-		byte_count = recvfrom(socket, buffer, sizeof(buffer), 0, (struct sockaddr*) &client, &tolen);
+		byte_count = recvfrom(socket, buffer, sizeof(buffer), 0, client, &tolen);
 		alarm(0); //we got something, turn it off.
 		
 		if (byte_count == 0) //we didn't get anything
 		{
+			fflush(stdout);
 			if (tries == 10) //we waited 10 seconds.
 			{
 				close(fd);
@@ -323,31 +332,32 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 			close(fd);
 			printf("[child %d] received invalid TFTP packet\n", getpid());
 			char errPack[BLOCK_SIZE];
-			short errCode = 05;
-			short* errCodeBytes = (short*)&errCode;
-			memcpy(errPack, errCodeBytes, 2);
-			errCode = 04; //illegal TFTP operation
-			errCodeBytes = (short*)&errCode;
-			memcpy(errPack+2, errCodeBytes, 2);
+			short errCode = htons(5);
+			memcpy(errPack, &errCode, 2);
+			errCode = htons(4); //illegal TFTP operation
+			memcpy(errPack+2, &errCode, 2);
 			char msg[20];
 			strcpy(msg, "invalid packet");
 			memcpy(errPack+2, msg, strlen(msg)+1);
-			sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+			sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 			return -1;
 		}
 		else if (checkOpCode(buffer, byte_count) != 3 && checkOpCode(buffer, byte_count) != 5)
 		{
+			fflush(stdout);
 			tries = 0; //we technically heard something
 			continue;
 		}
 		else if (checkOpCode(buffer, byte_count) == 5) //error means just close connection
 		{
+			fflush(stdout);
 			return -1;
 		}
 		else //we know it's a data pack
 		{
 			short* tempblock;
 			memcpy(tempblock, buffer+2, 2); //get the block number
+			fflush(stdout);
 			if (*tempblock <= blockNum) //duplicate packet
 			{
 				tries = 0; //we technically heard something
@@ -358,27 +368,24 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 				close(fd);
 				printf("[child %d] received packet for future block\n", getpid());
 				char errPack[BLOCK_SIZE];
-				short errCode = 05;
-				short* errCodeBytes = (short*)&errCode;
-				memcpy(errPack, errCodeBytes, 2);
-				errCode = 04; //illegal TFTP operation
-				errCodeBytes = (short*)&errCode;
-				memcpy(errPack+2, errCodeBytes, 2);
+				short errCode = htons(5);
+				memcpy(errPack, &errCode, 2);
+				errCode = htons(4); //illegal TFTP operation
+				memcpy(errPack+2, &errCode, 2);
 				char msg[20];
 				strcpy(msg, "future block");
 				memcpy(errPack+2, msg, strlen(msg)+1);
-				sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
+				sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 				return -1;
 			}
 			else //tempblock = blockNum+1, write to file.
 			{
 				writen(fd, buffer+4, 512);
 				//send ack
-				memcpy(ackPack, ackCodeBytes, 2);
+				memcpy(ackPack, &ackCode, 2);
 				blockNum = *tempblock;
-				blockNumBytes = (short*)&blockNum;
-				memcpy(ackPack+2, blockNumBytes, 2);
-				sendto(socket, ackPack, 4, 0, (struct sockaddr*) &client, tolen);
+				memcpy(ackPack+2, &blockNum, 2);
+				sendto(socket, ackPack, 4, 0, client, tolen);
 				//if byte_count < 516 it's the end of the file
 				return 0;
 			}
@@ -440,7 +447,7 @@ int main()
       perror("fork() failed");
       exit(EXIT_FAILURE);
     }
-    else if (pid == 0) {
+    else if (pid == 0) {		
 		close(sock);
 		//create/bind new socket for this connection.
 		int newsock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -461,7 +468,7 @@ int main()
     		perror("bind() failed");
     		exit(EXIT_FAILURE);
   		}
-		
+
 		//now we check the request opCode, which i'm not 100% sure how to do
 		int clientOpCode = checkOpCode(buffer, byte_count);
 		int rtn = 0;
