@@ -212,7 +212,10 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 			{
 				char tempblockNet[2];
 				memcpy(tempblockNet, newBuffer+2, 2); //get the block number
-				short tempblock = (tempblockNet[0] << 8) + tempblockNet[1]; // convert chars to short
+				unsigned char firstBit = tempblockNet[0];
+				unsigned char secondBit = tempblockNet[1];
+				unsigned short tempblock = (firstBit << 8) + secondBit; // convert chars to short
+
 				if (tempblock < blockn) //duplicate ack
 				{
 					tries = 0; //we technically heard something
@@ -345,7 +348,9 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		{
 			char tempblockNet[2];
 			memcpy(tempblockNet, newBuffer+2, 2); //get the block number
-			short tempblock = (tempblockNet[0] << 8) + tempblockNet[1]; // convert chars to short
+			unsigned char firstBit = tempblockNet[0];
+			unsigned char secondBit = tempblockNet[1];
+			unsigned short tempblock = (firstBit << 8) + secondBit; // convert chars to short
 
 			if (tempblock < blockNum) //duplicate packet
 			{
@@ -419,7 +424,7 @@ int main()
 	printf("Created port %d\n", the_port);
 
 	struct sockaddr_in client;
-	int fromlen = sizeof(client);
+	unsigned int fromlen = sizeof(client);
 
 	char buffer[BLOCK_SIZE];
 
