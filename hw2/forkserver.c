@@ -95,6 +95,23 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	char mode[byte_count];
 	strcpy(filename, buffer+2);
 	strcpy(mode, buffer+strlen(filename)+3);
+
+	//check for octet mode.
+	if (strcmp(mode, "octet") != 0)
+	{
+		printf("[child %d] received non-octet request\n", getpid());
+		char errPack[BLOCK_SIZE];
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(0); //file not found
+		memcpy(errPack+2, &errCode, 2);
+		char msg[20];
+		strcpy(msg, "Not octet mode");
+		memcpy(errPack+4, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
+		return -1;
+	}
+
 	int fd = open(filename, O_RDONLY,0);
 	struct stat fileinfo;
 	if (fd < 0 || fstat(fd, &fileinfo) < 0)
@@ -125,22 +142,6 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		memcpy(errPack+2, &errCode, 2);
 		char msg[20];
 		strcpy(msg, "Invalid file");
-		memcpy(errPack+4, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
-		return -1;
-	}
-	//check for octet mode.
-	if (strcmp(mode, "octet") != 0)
-	{
-		close(fd);
-		printf("[child %d] received non-octet request\n", getpid());
-		char errPack[BLOCK_SIZE];
-		short errCode = htons(5);
-		memcpy(errPack, &errCode, 2);
-		errCode = htons(0); //file not found
-		memcpy(errPack+2, &errCode, 2);
-		char msg[20];
-		strcpy(msg, "Not octet mode");
 		memcpy(errPack+4, msg, strlen(msg)+1);
 		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
@@ -251,6 +252,23 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	char mode[byte_count];
 	strcpy(filename, buffer+2);
 	strcpy(mode, buffer+strlen(filename)+3);
+
+	//check for octet mode.
+	if (strcmp(mode, "octet") != 0)
+	{
+		printf("[child %d] received non-octet request\n", getpid());
+		char errPack[BLOCK_SIZE];
+		short errCode = htons(5);
+		memcpy(errPack, &errCode, 2);
+		errCode = htons(0); //not defined
+		memcpy(errPack+2, &errCode, 2);
+		char msg[20];
+		strcpy(msg, "Not octet mode");
+		memcpy(errPack+4, msg, strlen(msg)+1);
+		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
+		return -1;
+	}
+
 	int fd = creat(filename, 0644);
 	if (fd < 0)
 	{
@@ -268,23 +286,6 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		return -1;
 	}
 	
-	//check for octet mode.
-	if (strcmp(mode, "octet") != 0)
-	{
-		close(fd);
-		printf("[child %d] received non-octet request\n", getpid());
-		char errPack[BLOCK_SIZE];
-		short errCode = htons(5);
-		memcpy(errPack, &errCode, 2);
-		errCode = htons(0); //not defined
-		memcpy(errPack+2, &errCode, 2);
-		char msg[20];
-		strcpy(msg, "Not octet mode");
-		memcpy(errPack+4, msg, strlen(msg)+1);
-		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
-		return -1;
-	}
-
 	//send ACK
 	char ackPack[4];
 	short ackCode = htons(4);
