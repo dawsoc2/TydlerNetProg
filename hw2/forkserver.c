@@ -397,7 +397,7 @@ int main()
 
 	server.sin_family = AF_INET;
 	server.sin_addr.s_addr = INADDR_ANY;
-	server.sin_port = htons(8765);
+	server.sin_port = htons(0);
 	int len = sizeof(server);
 
 	if (bind(sock, (struct sockaddr *)&server, len) < 0)
