@@ -1,11 +1,3 @@
-// Tyler Sontag (sontat)
-// 15 December, 2015
-// CSCI-4210 Project 4
-
-// NOTE: When receiving file data, the server always ignores the last
-// character because it assumes it is an extraneous newline character
-// sent by the client (e.g. netcat).
-
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -32,17 +24,18 @@
 //alarm function that simply returns to get us out of recvfrom()
 static void recv_alarm(int signo) {return;}
 
+//used for debugging
 void print_bytes(const void *object, size_t size)
 {
-  const unsigned char * const bytes = object;
-  size_t i;
+	const unsigned char * const bytes = object;
+	size_t i;
 
-  printf("[ ");
-  for(i = 0; i < size; i++)
-  {
-    printf("%02x ", bytes[i]);
-  }
-  printf("]\n");
+	printf("[ ");
+	for(i = 0; i < size; i++)
+	{
+		printf("%02x ", bytes[i]);
+	}
+	printf("]\n");
 }
 
 //readn from pg 89 of textbook
@@ -104,7 +97,8 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	strcpy(mode, buffer+strlen(filename)+3);
 	int fd = open(filename, O_RDONLY,0);
 	struct stat fileinfo;
-	if (fd < 0 || fstat(fd, &fileinfo) < 0) {
+	if (fd < 0 || fstat(fd, &fileinfo) < 0)
+	{
 		close(fd);
 		printf("[child %d] can't open file %s\n", getpid(), filename);
 		char errPack[BLOCK_SIZE];
@@ -120,7 +114,8 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		return -1;
 	}
 	//check for normal file.
-	if (!S_ISREG(fileinfo.st_mode)) {
+	if (!S_ISREG(fileinfo.st_mode))
+	{
 		close(fd);
 		printf("[child %d] requested abnormal file\n", getpid());
 		char errPack[BLOCK_SIZE];
@@ -134,7 +129,7 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
-	//check for octet mode. Currently only checks "octet" and not things such as "ocTEt"
+	//check for octet mode.
 	if (strcmp(mode, "octet") != 0)
 	{
 		close(fd);
@@ -150,29 +145,33 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
-	//otherwise...
+
 	//set alarm
 	signal(SIGALRM, recv_alarm);
+	int nbytes;
+	char newBuffer[BLOCK_SIZE];
 	char content[512];
-	int nbytes = readn(fd, content, 512);
 	short blockn = 1;
 	char packet[516];
+
 	while(1)
 	{
+		nbytes = readn(fd, content, 512);
 		short opCode = htons(3);
 		memcpy(packet, &opCode, 2);
 		short netBlockn = htons(blockn);
 		memcpy(packet+2, &netBlockn, 2);
 		memcpy(packet+4, content, nbytes);
-		int result = sendto(socket, packet, nbytes+4, 0, client, tolen);
-		printf("Result %d\n", result);
+		//send data packet
+		sendto(socket, packet, nbytes+4, 0, client, tolen);
+		printf("[child %d] sent data pack %d to client\n", getpid(), blockn);
 		//wait for ack for 10s.
 		int tries = 0;
 		while (1)
 		{
 			byte_count = 0;
 			alarm(1);
-			byte_count = recvfrom(socket, buffer, sizeof(buffer), 0, (struct sockaddr*) &client, &tolen);
+			byte_count = recvfrom(socket, newBuffer, sizeof(buffer), 0, client, &tolen);
 			alarm(0); //we got something, turn it off.
 			if (byte_count == 0) //we didn't get anything
 			{
@@ -189,32 +188,30 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 				close(fd);
 				printf("[child %d] received invalid TFTP packet\n", getpid());
 				char errPack[BLOCK_SIZE];
-				short errCode = 05;
-				short* errCodeBytes = (short*)&errCode;
-				memcpy(errPack, errCodeBytes, 2);
-				errCode = 04; //illegal TFTP operation
-				errCodeBytes = (short*)&errCode;
-				memcpy(errPack+2, errCodeBytes, 2);
+				short errCode = htons(5);
+				memcpy(errPack, &errCode, 2);
+				errCode = htons(4); //illegal TFTP operation
+				memcpy(errPack+2, &errCode, 2);
 				char msg[20];
 				strcpy(msg, "invalid packet");
-				memcpy(errPack+2, msg, strlen(msg)+1);
+				memcpy(errPack+4, msg, strlen(msg)+1);
 				sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
 				return -1;
 			}
-			if (checkOpCode(buffer, byte_count) != 4 && checkOpCode(buffer, byte_count) != 5)
+			if (checkOpCode(newBuffer, byte_count) != 4 && checkOpCode(newBuffer, byte_count) != 5)
 			{
 				tries = 0; //we technically heard something
 				continue;
 			}
-			else if (checkOpCode(buffer, byte_count) == 5) //error means just close connection
+			else if (checkOpCode(newBuffer, byte_count) == 5) //error means just close connection
 			{
 				return -1;
 			}
 			else //we know it's an ack
 			{
-				char tempblockStr[2];
-				memcpy(tempblockStr, buffer+2, 2); //get the block number
-				short tempblock = atoi(tempblockStr);
+				char tempblockNet[2];
+				memcpy(tempblockNet, newBuffer+2, 2); //get the block number
+				short tempblock = (tempblockNet[0] << 8) + tempblockNet[1]; // convert chars to short
 				if (tempblock < blockn) //duplicate ack
 				{
 					tries = 0; //we technically heard something
@@ -225,27 +222,25 @@ int HandleRRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 					close(fd);
 					printf("[child %d] received ACK for future block\n", getpid());
 					char errPack[BLOCK_SIZE];
-					short errCode = 05;
-					short* errCodeBytes = (short*)&errCode;
-					memcpy(errPack, errCodeBytes, 2);
-					errCode = 04; //illegal TFTP operation
-					errCodeBytes = (short*)&errCode;
-					memcpy(errPack+2, errCodeBytes, 2);
+					short errCode = htons(5);
+					memcpy(errPack, &errCode, 2);
+					errCode = htons(4); //illegal TFTP operation
+					memcpy(errPack+2, &errCode, 2);
 					char msg[20];
 					strcpy(msg, "future block ACK");
-					memcpy(errPack+2, msg, strlen(msg)+1);
+					memcpy(errPack+4, msg, strlen(msg)+1);
 					sendto(socket, errPack, strlen(msg)+5, 0, (struct sockaddr*) &client, tolen);
 					return -1;
 				}
 				else //tempblock == blockn
 				{
+					//move on to next data packet
+					blockn++;
 					break;
 				}
 			}
 		}
 		if (nbytes < 512) return 0; //end of file
-		//otherwise read the next 512 bytes.
-		nbytes = readn(fd, content, 512);
 	}
 }
 
@@ -257,7 +252,8 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 	strcpy(filename, buffer+2);
 	strcpy(mode, buffer+strlen(filename)+3);
 	int fd = creat(filename, 0644);
-	if (fd < 0) {
+	if (fd < 0)
+	{
 		close(fd);
 		printf("[child %d] can't create file %s\n", getpid(), filename);
 		char errPack[BLOCK_SIZE];
@@ -272,7 +268,7 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		return -1;
 	}
 	
-	//check for octet mode. Currently only checks "octet" and not things such as "ocTEt"
+	//check for octet mode.
 	if (strcmp(mode, "octet") != 0)
 	{
 		close(fd);
@@ -288,7 +284,6 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 		sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 		return -1;
 	}
-	//otherwise...
 
 	//send ACK
 	char ackPack[4];
@@ -372,7 +367,7 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 				sendto(socket, errPack, strlen(msg)+5, 0, client, tolen);
 				return -1;
 			}
-			else //tempblock = blockNum+1, write to file.
+			else //tempblock = blockNum, write to file.
 			{
 				printf("[child %d] wrote data pack %d to disk\n", getpid(), blockNum);
 				writen(fd, newBuffer+4, byte_count-4);
@@ -390,97 +385,94 @@ int HandleWRQ(char* buffer, int byte_count, int socket, struct sockaddr* client,
 
 int main()
 {
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  
-  if (sock < 0) {
-    perror("socket() failed");
-    exit(EXIT_FAILURE);
-  }
+	int sock = socket(AF_INET, SOCK_DGRAM, 0);
+	  
+	if (sock < 0)
+	{
+		perror("socket() failed");
+		exit(EXIT_FAILURE);
+	}
 	
-  struct sockaddr_in server;
+	struct sockaddr_in server;
 
-  server.sin_family = AF_INET;
-  server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_family = AF_INET;
+	server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_port = htons(8765);
+	int len = sizeof(server);
 
-  //choose arbitrary port
-  //unsigned short port = 8765;
+	if (bind(sock, (struct sockaddr *)&server, len) < 0)
+	{
+		perror("bind() failed");
+		exit(EXIT_FAILURE);
+	}
 
-  server.sin_port = htons(8765);
-  int len = sizeof(server);
+	struct sockaddr_in temp_addr;
+	socklen_t sz = sizeof(temp_addr);
+	int ret = getsockname(sock, (struct sockaddr*) &temp_addr, &sz);
+	if (ret < 0)
+	{
+		printf("problem!\n");
+		exit(-1);
+	}
+	int the_port = ntohs(temp_addr.sin_port);
+	printf("Created port %d\n", the_port);
 
-  if (bind(sock, (struct sockaddr *)&server, len) < 0) {
-    perror("bind() failed");
-    exit(EXIT_FAILURE);
-  }
+	struct sockaddr_in client;
+	int fromlen = sizeof(client);
 
-  struct sockaddr_in temp_addr;
-  socklen_t sz = sizeof(temp_addr);
-  int ret = getsockname(sock, (struct sockaddr*) &temp_addr, &sz);
-  if (ret < 0) {
-	  printf("problem!\n");
-	  exit(-1);
-  }
-  int the_port = ntohs(temp_addr.sin_port);
-  printf("Created port %d\n", the_port);
+	char buffer[BLOCK_SIZE];
 
-  //listen(sock, 10); // Maximum number of clients allowed is 10
+	while (1)
+	{
+		int byte_count = recvfrom(sock, (void*)buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &fromlen);
+		printf("Received %d bytes from incoming connection %s\n", byte_count, inet_ntoa((struct in_addr)client.sin_addr));
 
-  struct sockaddr_in client;
-  int fromlen = sizeof(client);
+		int pid;
+		pid = fork();
 
-  char buffer[BLOCK_SIZE];
+		if (pid < 0) {
+		  perror("fork() failed");
+		  exit(EXIT_FAILURE);
+		}
+		else if (pid == 0) {		
+			close(sock);
+			//create/bind new socket for this connection.
+			int newsock = socket(AF_INET, SOCK_DGRAM, 0);
 
-  while (1) {
-	// recvfrom(int sock, void* buf, size_t size_of_buf, int flags, struct sockaddr* from, socklen_t *fromlen)
-    int byte_count = recvfrom(sock, (void*)buffer, sizeof(buffer), 0, (struct sockaddr *)&client, &fromlen);
-    printf("Received %d bytes from incoming connection %s\n", byte_count, inet_ntoa((struct in_addr)client.sin_addr));
+			if (newsock < 0) {
+				perror("socket() failed");
+				exit(EXIT_FAILURE);
+			}
 
-    int pid;
-    pid = fork();
+			struct sockaddr_in newserver;
 
-    if (pid < 0) {
-      perror("fork() failed");
-      exit(EXIT_FAILURE);
-    }
-    else if (pid == 0) {		
-		close(sock);
-		//create/bind new socket for this connection.
-		int newsock = socket(AF_INET, SOCK_DGRAM, 0);
-  
-    	if (newsock < 0) {
-    		perror("socket() failed");
-    		exit(EXIT_FAILURE);
-  		}
-	
-  		struct sockaddr_in newserver;
+			newserver.sin_family = AF_INET;
+			newserver.sin_addr.s_addr = INADDR_ANY;
+			newserver.sin_port = htons(0);
+			int newlen = sizeof(newserver);
 
-  		newserver.sin_family = AF_INET;
-  		newserver.sin_addr.s_addr = INADDR_ANY;
-  		newserver.sin_port = htons(0);
-  		int newlen = sizeof(newserver);
+			if (bind(newsock, (struct sockaddr *)&newserver, newlen) < 0) {
+				perror("bind() failed");
+				exit(EXIT_FAILURE);
+			}
 
-  		if (bind(newsock, (struct sockaddr *)&newserver, newlen) < 0) {
-    		perror("bind() failed");
-    		exit(EXIT_FAILURE);
-  		}
+			//now we check the request opCode, which i'm not 100% sure how to do
+			int clientOpCode = checkOpCode(buffer, byte_count);
+			int rtn = 0;
+			if (clientOpCode == 1) {rtn = HandleRRQ(buffer, byte_count, newsock, (struct sockaddr *)&client, fromlen); }
+			else if (clientOpCode == 2) {rtn = HandleWRQ(buffer, byte_count, newsock, (struct sockaddr *)&client, fromlen); }
+			else {rtn = -1;} //a new client that isn't RRQ or WRQ is an error.
 
-		//now we check the request opCode, which i'm not 100% sure how to do
-		int clientOpCode = checkOpCode(buffer, byte_count);
-		int rtn = 0;
-		if (clientOpCode == 1) {rtn = HandleRRQ(buffer, byte_count, newsock, (struct sockaddr *)&client, fromlen); }
-		else if (clientOpCode == 2) {rtn = HandleWRQ(buffer, byte_count, newsock, (struct sockaddr *)&client, fromlen); }
-		else {rtn = -1;} //a new client that isn't RRQ or WRQ is an error.
-		
-		//close the new socket
-		close(newsock);
-		printf("[child %d] Client closed its socket....terminating\n", getpid());
-		if (rtn == 0) {	exit(EXIT_SUCCESS); }
-		else { exit(EXIT_FAILURE); }
-    }
-    else { /*do nothing*/ }
-  }
+			//close the new socket
+			close(newsock);
+			printf("[child %d] Client closed its socket....terminating\n", getpid());
+			if (rtn == 0) {	exit(EXIT_SUCCESS); }
+			else { exit(EXIT_FAILURE); }
+		}
+		else { /*parent process, do nothing*/ }
+	}
 
-  close(sock);
+	close(sock);
 
-  return EXIT_SUCCESS;
+	return EXIT_SUCCESS;
 }
