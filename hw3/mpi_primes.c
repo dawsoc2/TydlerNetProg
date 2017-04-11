@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define LIMIT 1000
+#define LIMIT 100000
 
 int isprime(int n) {
 	int i;
@@ -13,32 +13,46 @@ int isprime(int n) {
 }
 
 int main (int argc, char *argv[]) {
-	int count, id, n, pcount, primesum;
-	double start_time, end_time;
+	int count, id, i, intbuffer, source, primecount;
+	double starttime, endtime;
 	
 	MPI_Init(&argc, &argv);
 	MPI_Comm_size(MPI_COMM_WORLD, &count);
 	MPI_Comm_rank(MPI_COMM_WORLD, &id);
 
-	start_time = MPI_Wtime();
-	pcount = 0;
-
-	// consider only odd numbers
-	// this prints 1 as a prime instead of 2 lol w/e will fix later
-	for (n = (id * 2) + 1; n <= LIMIT; n += count * 2) {
-		if (isprime(n)) {
-			pcount++;
-			printf("%d\n", n);
-		}
-	}
-
-	MPI_Reduce(&pcount, &primesum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-
 	if (id == 0) {
-	   end_time = MPI_Wtime();
-	   printf("Primes below %d: %d\n", LIMIT, primesum);
-	   printf("time elapsed: %.3lf seconds\n", end_time - start_time);
+		starttime = MPI_Wtime();
+		printf("2\n");
+		primecount = 1;
+		if (count > 1) {
+			for (i = 3; i <= LIMIT; i += 2) {
+				source = (i/2 - 1) % (count-1) + 1; // awkward conversion, but works
+				MPI_Recv(&intbuffer, 1, MPI_INT, source, 0,
+					MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+				if (intbuffer) {
+					printf("%d\n", i);
+					primecount++;
+				}
+			}
+		} else { // only one process, don't parallelize
+			for (i = 3; i <= LIMIT; i += 2) {
+				if (isprime(i)) {
+					printf("%d\n", i);
+					primecount++;
+				}
+			}
+		}
+		endtime = MPI_Wtime();
+		printf("found %d primes below %d\n", primecount, LIMIT);
+		printf("time elapsed: %.3lf seconds\n", endtime - starttime);
+	}
+	else {
+		for (i = (id * 2) + 1; i <= LIMIT; i += (count - 1) * 2) {
+			intbuffer = isprime(i);
+			MPI_Send(&intbuffer, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+		}
 	}
 
 	MPI_Finalize();
 }
+
