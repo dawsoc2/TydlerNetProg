@@ -53,9 +53,9 @@ int main (int argc, char *argv[]) {
 			pcount++;
 		if (n < base && n > base - count * 2) {
 			MPI_Reduce(&pcount, &primesum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-			base = base*10;
 			if (id == 0)
 				printf("Primes below %d: %d\n", base, primesum);
+			base = base*10;
 		}
 	}
 
