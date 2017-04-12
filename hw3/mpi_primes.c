@@ -2,8 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
+#include <limits.h>
 
-#define LIMIT 100000000
+#define LIMIT INT_MAX
 
 int end_now = 0;
 
