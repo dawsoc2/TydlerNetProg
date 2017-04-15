@@ -91,13 +91,16 @@ int main (int argc, char *argv[]) {
 	// (id - count) exists to allow space for all processes to reduce at 10
 	// even if they do not check a number between 1 and 10
 
+	if (id == 0)
+		printf("%*s%*s\n", 15, "N", 15, "Primes");
+
 	base = 10;
 	for (n = ((id - count) * 2) + 1; n <= LIMIT; n += count * 2) {
 		if (end_now == 1) {
 			MPI_Reduce(&pcount, &primesum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 			MPI_Reduce(&n, &nsum, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
 			if (id == 0)
-				printf("Primes below %d: %d\n", nsum, primesum);
+				printf("%*d%*d\n", 15, nsum, 15, primesum);
 			break;
 		}
 		if (n >= 3 && isprime(n))
@@ -105,7 +108,7 @@ int main (int argc, char *argv[]) {
 		if (n < base && n > base - count * 2) {
 			MPI_Reduce(&pcount, &primesum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 			if (id == 0)
-				printf("Primes below %d: %d\n", base, primesum);
+				printf("%*d%*d\n", 15, base, 15, primesum);
 			base = base*10;
 		}
 	}
