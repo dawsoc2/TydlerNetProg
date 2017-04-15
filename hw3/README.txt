@@ -1,3 +1,7 @@
+Team members: Chandler Dawson and Tyler Sontag.
+
+Our program did not speed up as the number of processes increased, but this may be due to our limited testing environments (we're both using a virtual machine).
+
 # of proccesses / # of primes in 10 seconds
 1  / 2019729
 2  / 2011676
