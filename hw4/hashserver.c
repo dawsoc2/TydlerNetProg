@@ -1,15 +1,34 @@
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
-#include <netinet/in.h> /* INET constants and stuff */
-#include <arpa/inet.h>  /* IP address conversion stuff */
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <openssl/md5.h>
 
 #define MAXBUF 1024
+#define FILEBUF 1024*1024
+
+void print_bytes(const void *object, size_t size)
+{
+	const unsigned char * const bytes = object;
+	size_t i;
+
+	printf("[ ");
+	for(i = 0; i < size; i++)
+	{
+		printf("%02x ", bytes[i]);
+	}
+	printf("]\n");
+}
 
 //readn from pg 89 of textbook
 ssize_t readn(int fd, void *vptr, size_t n)
@@ -82,15 +101,37 @@ int handleServer(unsigned short port) {
     }
 
     char buffer[MAXBUF];
+	char lastmod[4];
+	unsigned char md5[16];
+	char fname[256];
     while (1) {
         int length = recvfrom(fd, buffer, sizeof(buffer) - 1, 0, NULL, 0);
         if (length < 0) {
             perror("recvfrom() failed");
             break;
         }
-        buffer[length] = '\0';
-        printf("%d bytes: '%s'\n", length, buffer);
+		memcpy(lastmod, buffer + 2, 4);
+		memcpy(md5, buffer + 6, 16);
+		memcpy(fname, buffer + 22, length - 22);
+        
+		/*
+		if file is not on server
+			request file back from client
+			wait for response
+			read in file
+		if file is on server
+			if hashes are not equal
+				if client lastmod > server lastmod
+					request file back from client
+					wait for response
+					read in file
+			else
+				send "don't need file" message back
+				server will send its files to client in second phase
+		*/
     }
+
+	// after this is done, send file info to the client
 
     close(fd);
 	return 0;
@@ -112,8 +153,14 @@ int handleClient(unsigned short port) {
     serveraddr.sin_port = htons(port);              
     serveraddr.sin_addr.s_addr = htonl(0x7f000001); // connect to localhost
 
-    int len, n, n_sent;
+    int len, n, n_sent, fd2;
+	ssize_t f_read;
+	short opcode;
     char bufin[MAXBUF];
+	char buffile[FILEBUF];
+	struct stat filestat;
+	int lastmod;
+	unsigned char md5[16];
 	len = sizeof(serveraddr);
 
 	DIR *d;
@@ -122,17 +169,43 @@ int handleClient(unsigned short port) {
 	if (d) {
 		while ((dir = readdir(d)) != NULL) {
 			if (dir->d_type == DT_REG) {
+
+				opcode = htons(1);
+				memcpy(bufin, &opcode, 2);
+
+				fd2 = open(dir->d_name, O_RDONLY, 0);
+				f_read = (fd2, buffile, FILEBUF);
+
+				fstat(fd2, &filestat);
+				lastmod = htonl((int) filestat.st_mtime);
+				memcpy(bufin + 2, &lastmod, 4);
+
+				//MD5((unsigned char *) buffile, f_read, md5);
+				memcpy(bufin + 6, md5, 16);
+
 				n = strlen(dir->d_name);
-				memcpy(bufin, dir->d_name, n);
-				n_sent = sendto(fd, bufin, n, 0, (struct sockaddr *)&serveraddr, len);
-				printf("Sent \"%s\"\n", dir->d_name);
-				if (n_sent != n) {
-					printf("sendto() failed\n");
-				}
+				memcpy(bufin + 22, dir->d_name, n);
+
+				n_sent = sendto(fd, bufin, n + 22, 0, (struct sockaddr *)&serveraddr, len);
+				//printf("Sent %d bytes for file %s\n", n_sent, dir->d_name);
+
+				/*
+				wait for a message back
+				if the client sends a "don't need file" message
+					continue
+				else
+					send the file
+				*/
+
+
+				close(fd2);
 			}
 		}
 		closedir(d);
 	}
+
+	// after this is done, wait for file info from the server 
+
 	close(fd);
 	return 0;
 }
