@@ -30,6 +30,15 @@ void print_bytes(const void *object, size_t size)
 	printf("]\n");
 }
 
+int unpackTime(char* buffer) {
+	// assume time arrives in big-endian
+	return
+		((unsigned char) buffer[0] << 24) +
+		((unsigned char) buffer[1] << 16) +
+		((unsigned char) buffer[2] << 8) +
+		((unsigned char) buffer[3]);
+}
+
 //readn from pg 89 of textbook
 ssize_t readn(int fd, void *vptr, size_t n)
 {
@@ -100,19 +109,47 @@ int handleServer(unsigned short port) {
         return 1;
     }
 
-    char buffer[MAXBUF];
-	char lastmod[4];
+	char buffer[MAXBUF];
+
+	char lastmodstr[4];
+	int client_lastmod;
+	int server_lastmod;
 	unsigned char md5[16];
 	char fname[256];
+	char fullpath[256];
+
+	struct stat filestat;
+
     while (1) {
         int length = recvfrom(fd, buffer, sizeof(buffer) - 1, 0, NULL, 0);
         if (length < 0) {
             perror("recvfrom() failed");
             break;
         }
-		memcpy(lastmod, buffer + 2, 4);
+		memcpy(lastmodstr, buffer + 2, 4);
+		client_lastmod = unpackTime(lastmodstr);
 		memcpy(md5, buffer + 6, 16);
 		memcpy(fname, buffer + 22, length - 22);
+		printf("File %s was last modified %d\n", fname, server_lastmod);
+
+		// this directory is temporary, will be fixed later
+		strcpy(fullpath, "./folder/");
+		strcpy(fullpath + 9, fname);
+		printf("Attempting to access %s\n", fullpath);
+		int res = stat(fullpath, &filestat);
+		if (res == -1 && errno == ENOENT) {
+			printf("%s doesn't exist on server\n", fname);
+		} else {
+			server_lastmod = (int) filestat.st_mtime;
+			printf("%s exists on server and was last modified %d\n", fname, server_lastmod);
+			if (client_lastmod > server_lastmod) {
+				printf("I will request client for the file\n");
+			} else {
+				printf("My file is more recent, do nothing\n");
+			}
+		}
+
+		printf("\n");
         
 		/*
 		if file is not on server
@@ -156,11 +193,14 @@ int handleClient(unsigned short port) {
     int len, n, n_sent, fd2;
 	ssize_t f_read;
 	short opcode;
-    char bufin[MAXBUF];
+    char buffer[MAXBUF];
 	char buffile[FILEBUF];
 	struct stat filestat;
+
 	int lastmod;
 	unsigned char md5[16];
+	char fname[256];
+
 	len = sizeof(serveraddr);
 
 	DIR *d;
@@ -171,23 +211,25 @@ int handleClient(unsigned short port) {
 			if (dir->d_type == DT_REG) {
 
 				opcode = htons(1);
-				memcpy(bufin, &opcode, 2);
+				memcpy(buffer, &opcode, 2);
 
 				fd2 = open(dir->d_name, O_RDONLY, 0);
 				f_read = (fd2, buffile, FILEBUF);
 
 				fstat(fd2, &filestat);
 				lastmod = htonl((int) filestat.st_mtime);
-				memcpy(bufin + 2, &lastmod, 4);
+				memcpy(buffer + 2, &lastmod, 4);
 
 				//MD5((unsigned char *) buffile, f_read, md5);
-				memcpy(bufin + 6, md5, 16);
+				memcpy(buffer + 6, md5, 16);
 
 				n = strlen(dir->d_name);
-				memcpy(bufin + 22, dir->d_name, n);
+				memcpy(fname, dir->d_name, n);
+				fname[n] = '\0';
+				memcpy(buffer + 22, fname, n + 1);
 
-				n_sent = sendto(fd, bufin, n + 22, 0, (struct sockaddr *)&serveraddr, len);
-				//printf("Sent %d bytes for file %s\n", n_sent, dir->d_name);
+				n_sent = sendto(fd, buffer, n + 23, 0, (struct sockaddr *)&serveraddr, len);
+				printf("Sent %d bytes for file %s, last mod %d\n", n_sent, dir->d_name, (int) filestat.st_mtime);
 
 				/*
 				wait for a message back
@@ -196,7 +238,6 @@ int handleClient(unsigned short port) {
 				else
 					send the file
 				*/
-
 
 				close(fd2);
 			}
