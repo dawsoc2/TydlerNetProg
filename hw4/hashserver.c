@@ -109,7 +109,12 @@ int handleServer(unsigned short port) {
         return 1;
     }
 
+	struct sockaddr clientaddr;
+	socklen_t len = sizeof(clientaddr);
+
 	char buffer[MAXBUF];
+	char packet[MAXBUF];
+	memset(&packet, 0, 4);
 
 	char lastmodstr[4];
 	int client_lastmod;
@@ -117,11 +122,13 @@ int handleServer(unsigned short port) {
 	unsigned char md5[16];
 	char fname[256];
 	char fullpath[256];
+	char filebuffer[FILEBUF];
 
+	short opcode;
 	struct stat filestat;
 
     while (1) {
-        int length = recvfrom(fd, buffer, sizeof(buffer) - 1, 0, NULL, 0);
+        int length = recvfrom(fd, buffer, sizeof(buffer), 0, &clientaddr, &len);
         if (length < 0) {
             perror("recvfrom() failed");
             break;
@@ -139,36 +146,36 @@ int handleServer(unsigned short port) {
 		int res = stat(fullpath, &filestat);
 		if (res == -1 && errno == ENOENT) {
 			printf("%s doesn't exist on server\n", fname);
+			opcode = htons(2);
+			memcpy(packet, &opcode, 2);
+			sendto(fd, packet, 4, 0, (struct sockaddr *)&clientaddr, len);
+			length = recvfrom(fd, filebuffer, sizeof(filebuffer), 0, &clientaddr, &len);
+			int fd2 = open(fullpath, O_WRONLY | O_CREAT, 0644);
+			pwrite(fd2, filebuffer + 2, length - 2, 0);
+			close(fd2);
 		} else {
+			// still needs to compare hashes
 			server_lastmod = (int) filestat.st_mtime;
 			printf("%s exists on server and was last modified %d\n", fname, server_lastmod);
 			if (client_lastmod > server_lastmod) {
 				printf("I will request client for the file\n");
+				opcode = htons(2);
+				memcpy(packet, &opcode, 2);
+				sendto(fd, packet, 4, 0, (struct sockaddr *)&clientaddr, len);
+				length = recvfrom(fd, filebuffer, sizeof(filebuffer), 0, &clientaddr, &len);
+				int fd2 = open(fullpath, O_WRONLY | O_CREAT, 0644);
+				pwrite(fd2, filebuffer + 2, length - 2, 0);
+				close(fd2);
 			} else {
 				printf("My file is more recent, do nothing\n");
+				opcode = htons(3);
+				memcpy(packet, &opcode, 2);
+				sendto(fd, packet, 4, 0, (struct sockaddr *)&clientaddr, len);
 			}
 		}
 
 		printf("\n");
-        
-		/*
-		if file is not on server
-			request file back from client
-			wait for response
-			read in file
-		if file is on server
-			if hashes are not equal
-				if client lastmod > server lastmod
-					request file back from client
-					wait for response
-					read in file
-			else
-				send "don't need file" message back
-				server will send its files to client in second phase
-		*/
     }
-
-	// after this is done, send file info to the client
 
     close(fd);
 	return 0;
@@ -190,10 +197,12 @@ int handleClient(unsigned short port) {
     serveraddr.sin_port = htons(port);              
     serveraddr.sin_addr.s_addr = htonl(0x7f000001); // connect to localhost
 
-    int len, n, n_sent, fd2;
+    int n, n_sent, fd2;
+	socklen_t len;
 	ssize_t f_read;
 	short opcode;
     char buffer[MAXBUF];
+	char packet[MAXBUF];
 	char buffile[FILEBUF];
 	struct stat filestat;
 
@@ -214,13 +223,13 @@ int handleClient(unsigned short port) {
 				memcpy(buffer, &opcode, 2);
 
 				fd2 = open(dir->d_name, O_RDONLY, 0);
-				f_read = (fd2, buffile, FILEBUF);
+				f_read = pread(fd2, buffile, FILEBUF, 0);
 
 				fstat(fd2, &filestat);
 				lastmod = htonl((int) filestat.st_mtime);
 				memcpy(buffer + 2, &lastmod, 4);
 
-				//MD5((unsigned char *) buffile, f_read, md5);
+				MD5((unsigned char *) buffile, f_read, md5);
 				memcpy(buffer + 6, md5, 16);
 
 				n = strlen(dir->d_name);
@@ -228,17 +237,23 @@ int handleClient(unsigned short port) {
 				fname[n] = '\0';
 				memcpy(buffer + 22, fname, n + 1);
 
+				if (strcmp(dir->d_name, "small.txt") == 0)
+					print_bytes(buffile, f_read);
+
 				n_sent = sendto(fd, buffer, n + 23, 0, (struct sockaddr *)&serveraddr, len);
 				printf("Sent %d bytes for file %s, last mod %d\n", n_sent, dir->d_name, (int) filestat.st_mtime);
 
-				/*
-				wait for a message back
-				if the client sends a "don't need file" message
-					continue
-				else
-					send the file
-				*/
+				recvfrom(fd, packet, 4, 0, NULL, 0);
 
+				if (checkOpCode(packet, 4) == 2) {
+					short opcode = htons(4);
+					char filepacket[f_read + 2];
+					memcpy(filepacket, &opcode, 2);
+					memcpy(filepacket + 2, buffile, f_read);
+					sendto(fd, filepacket, f_read + 2, 0, (struct sockaddr *)&serveraddr, len);
+				} else {
+					// just chill tbh
+				}
 				close(fd2);
 			}
 		}
