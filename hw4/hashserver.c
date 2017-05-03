@@ -36,7 +36,7 @@
 	05: Done sending files packet, 2 bytes for opcode, 2 bytes of null chars
 */
 
-// Debugging function
+// converts 16 byte MD5 to 32 byte ASCII
 char * bytesToStr(unsigned char * md5) {
 	int i = 0;
 	static char outmd5[32];
