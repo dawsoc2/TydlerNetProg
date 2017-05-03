@@ -97,6 +97,12 @@ int handleServer(unsigned short port) {
 	short opcode;
 	struct stat filestat;
 
+	//create the temporary directory
+	char template[] = "./.serverXXXXXX";
+	char* temp_dir_name = mkdtemp(template);
+	printf("Created directory %s\n", temp_dir_name);
+	
+	
     while (1) {
 		// Phase 1, receive files from client
 		while (1) {
@@ -116,8 +122,9 @@ int handleServer(unsigned short port) {
 			printf("File %s was last modified %d\n", fname, server_lastmod);
 
 			// this directory is temporary, will be fixed later
-			strcpy(fullpath, "./folder/");
-			strcpy(fullpath + 9, fname);
+			strcpy(fullpath, temp_dir_name);
+			strcpy(fullpath + 15, "/"); //15 from "./.serverXXXXXX"
+			strcpy(fullpath + 16, fname); //16 from "./.serverXXXXXX/"
 			printf("Attempting to access %s\n", fullpath);
 			int res = stat(fullpath, &filestat);
 			if (res == -1 && errno == ENOENT) {
@@ -166,7 +173,7 @@ int handleServer(unsigned short port) {
 
 		DIR *d;
 		struct dirent *dir;
-		d = opendir("./folder");
+		d = opendir(temp_dir_name);
 		if (d) {
 			while ((dir = readdir(d)) != NULL) {
 				if (dir->d_type == DT_REG) {
@@ -174,8 +181,9 @@ int handleServer(unsigned short port) {
 					opcode = htons(1);
 					memcpy(buffer, &opcode, 2);
 
-					strcpy(fullpath, "./folder/");
-					strcpy(fullpath + 9, dir->d_name);
+					strcpy(fullpath, temp_dir_name);
+					strcpy(fullpath + 15, "/");
+					strcpy(fullpath + 16, dir->d_name);
 
 					fd2 = open(fullpath, O_RDONLY, 0);
 					f_read = pread(fd2, filebuffer, FILEBUF, 0);
@@ -332,7 +340,7 @@ int handleClient(unsigned short port) {
 				printf("Hash between client and server are unequal\n");
 				server_lastmod = (int) filestat.st_mtime;
 				printf("%s exists on client and was last modified %d\n", fname, server_lastmod);
-				if (client_lastmod > server_lastmod) {
+				if (client_lastmod < server_lastmod) {
 					printf("I will request server for the file\n");
 					opcode = htons(2);
 					memcpy(packet, &opcode, 2);
